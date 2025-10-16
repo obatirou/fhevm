@@ -4,20 +4,11 @@ import { expect } from "chai";
 import { Wallet } from "ethers";
 import hre from "hardhat";
 
-import {
-  CiphertextCommits,
-  Decryption,
-  Decryption__factory,
-  GatewayConfig,
-  IDecryption,
-  KMSGeneration,
-  MultichainACL,
-} from "../typechain-types";
+import { CiphertextCommits, Decryption, Decryption__factory, IDecryption, MultichainACL } from "../typechain-types";
 // The type needs to be imported separately because it is not properly detected by the linter
 // as this type is defined as a shared structs instead of directly in the IDecryption interface
 import {
   CtHandleContractPairStruct,
-  DelegationAccountsStruct,
   SnsCiphertextMaterialStruct,
 } from "../typechain-types/contracts/interfaces/IDecryption";
 import {
@@ -27,7 +18,6 @@ import {
   createBytes32s,
   createCtHandle,
   createCtHandles,
-  createEIP712RequestDelegatedUserDecrypt,
   createEIP712RequestUserDecrypt,
   createEIP712ResponsePublicDecrypt,
   createEIP712ResponseUserDecrypt,
@@ -36,7 +26,6 @@ import {
   createRandomWallet,
   getKeyId,
   getPublicDecryptId,
-  getSignaturesDelegatedUserDecryptRequest,
   getSignaturesPublicDecrypt,
   getSignaturesUserDecryptRequest,
   getSignaturesUserDecryptResponse,
@@ -104,8 +93,6 @@ describe("Decryption", function () {
   // Define extra data for version 0
   const extraDataV0 = hre.ethers.solidityPacked(["uint8"], [0]);
 
-  let gatewayConfig: GatewayConfig;
-  let kmsGeneration: KMSGeneration;
   let MultichainACL: MultichainACL;
   let ciphertextCommits: CiphertextCommits;
   let decryption: Decryption;
@@ -210,8 +197,6 @@ describe("Decryption", function () {
     beforeEach(async function () {
       // Initialize globally used variables before each test
       const fixtureData = await loadFixture(preparePublicDecryptEIP712Fixture);
-      gatewayConfig = fixtureData.gatewayConfig;
-      kmsGeneration = fixtureData.kmsGeneration;
       MultichainACL = fixtureData.MultichainACL;
       ciphertextCommits = fixtureData.ciphertextCommits;
       decryption = fixtureData.decryption;
@@ -737,8 +722,6 @@ describe("Decryption", function () {
     beforeEach(async function () {
       // Initialize globally used variables before each test
       const fixtureData = await loadFixture(prepareUserDecryptEIP712Fixture);
-      gatewayConfig = fixtureData.gatewayConfig;
-      kmsGeneration = fixtureData.kmsGeneration;
       MultichainACL = fixtureData.MultichainACL;
       ciphertextCommits = fixtureData.ciphertextCommits;
       decryption = fixtureData.decryption;

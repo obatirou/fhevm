@@ -6,6 +6,7 @@ import path from "path";
 
 import { ADDRESSES_DIR } from "../../hardhat.config";
 import { getRequiredEnvVar } from "../../tasks/utils/loadVariables";
+import { approveContractWithMaxAllowance, fundSignerWithMockedZamaToken } from "./mockedZamaToken";
 import { fund } from "./wallets";
 
 // Loads the host chains' chain IDs
@@ -131,6 +132,25 @@ async function initTestingWallets(nKmsNodes: number, nCoprocessors: number, nCus
   };
 }
 
+// Fund the first signer with mocked $ZAMA tokens and approve the contracts with maximum allowance over its tokens
+// @param owner The owner who initially owns the tokens and will transfer them to the first signer
+async function fundFirstSignerWithMockedZamaTokenAndApproveContracts(owner: Wallet) {
+  // Get the first signer, used for sending all transactions in non-payment related tests
+  const signers = await hre.ethers.getSigners();
+  const firstSigner = signers[0];
+
+  // Fund the first signer with mocked $ZAMA tokens using the owner's balance
+  await fundSignerWithMockedZamaToken(owner, firstSigner);
+
+  // Get the addresses of the contracts to approve
+  const decryptionAddress = getRequiredEnvVar("DECRYPTION_ADDRESS");
+  const inputVerificationAddress = getRequiredEnvVar("INPUT_VERIFICATION_ADDRESS");
+
+  // Approve the contracts with maximum allowance over the first signer's tokens
+  await approveContractWithMaxAllowance(firstSigner, decryptionAddress);
+  await approveContractWithMaxAllowance(firstSigner, inputVerificationAddress);
+}
+
 // Loads the addresses of the deployed contracts, and the values required for the tests.
 export async function loadTestVariablesFixture() {
   // Load the number of KMS nodes and coprocessors
@@ -174,6 +194,15 @@ export async function loadTestVariablesFixture() {
   // Load the PauserSet contract
   const pauserSet = await hre.ethers.getContractAt("PauserSet", getRequiredEnvVar("PAUSER_SET_ADDRESS"));
 
+  // Load the ProtocolPayment contract
+  const protocolPayment = await hre.ethers.getContractAt(
+    "ProtocolPayment",
+    getRequiredEnvVar("PROTOCOL_PAYMENT_ADDRESS"),
+  );
+
+  // Fund the first signer with mocked $ZAMA tokens and approve the contracts with maximum allowance over its tokens
+  await fundFirstSignerWithMockedZamaTokenAndApproveContracts(fixtureData.owner);
+
   return {
     ...fixtureData,
     gatewayConfig,
@@ -187,5 +216,6 @@ export async function loadTestVariablesFixture() {
     nCoprocessors,
     nCustodians,
     pauserSet,
+    protocolPayment,
   };
 }
