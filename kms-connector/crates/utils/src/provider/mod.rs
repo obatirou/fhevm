@@ -1,3 +1,6 @@
+mod nonce_manager;
+
+use crate::provider::nonce_manager::ZamaNonceManager;
 use alloy::{
     consensus::Account,
     eips::{BlockId, BlockNumberOrTag, Encodable2718},
@@ -7,29 +10,25 @@ use alloy::{
         U256,
     },
     providers::{
-        EthCall, EthCallMany, EthGetBlock, FilterPollerBuilder, GetSubscription,
-        PendingTransaction, PendingTransactionBuilder, PendingTransactionConfig,
-        PendingTransactionError, Provider, ProviderCall, RootProvider, RpcWithBlock, SendableTx,
-        fillers::{
-            BlobGasFiller, CachedNonceManager, FillProvider, GasFiller, JoinFill, NonceManager,
-            TxFiller,
-        },
+        EthCall, EthCallMany, EthGetBlock, FilterPollerBuilder, PendingTransaction,
+        PendingTransactionBuilder, PendingTransactionConfig, PendingTransactionError, Provider,
+        ProviderCall, RootProvider, RpcWithBlock, SendableTx,
+        fillers::{BlobGasFiller, FillProvider, GasFiller, JoinFill, NonceManager, TxFiller},
     },
     rpc::{
         client::NoParams,
+        json_rpc::ErrorPayload,
         types::{
             AccessListResult, Bundle, EIP1186AccountProofResponse, EthCallResponse, FeeHistory,
             Filter, FilterChanges, Index, Log, SyncStatus, TransactionReceipt, TransactionRequest,
             erc4337::TransactionConditional,
-            pubsub::{Params, SubscriptionKind},
             simulate::{SimulatePayload, SimulatedBlock},
         },
     },
-    transports::{TransportError, TransportResult},
+    transports::{RpcError, TransportError, TransportErrorKind, TransportResult},
 };
-use futures::lock::Mutex;
 use serde_json::value::RawValue;
-use std::{borrow::Cow, sync::Arc};
+use std::borrow::Cow;
 
 pub type FillersWithoutNonceManagement = JoinFill<GasFiller, BlobGasFiller>;
 
@@ -46,7 +45,7 @@ where
 {
     inner: FillProvider<F, P, N>,
     signer_address: Address,
-    nonce_manager: Arc<Mutex<CachedNonceManager>>,
+    nonce_manager: ZamaNonceManager,
 }
 
 impl<F, P> NonceManagedProvider<F, P>
@@ -58,7 +57,7 @@ where
         Self {
             inner: provider,
             signer_address,
-            nonce_manager: Default::default(),
+            nonce_manager: ZamaNonceManager::new(),
         }
     }
 
@@ -66,11 +65,10 @@ where
         &self,
         mut tx: TransactionRequest,
     ) -> TransportResult<TransactionReceipt> {
+        let signer_addr = self.signer_address;
         let nonce = self
             .nonce_manager
-            .lock()
-            .await
-            .get_next_nonce(&self.inner, self.signer_address)
+            .get_next_nonce(&self.inner, signer_addr)
             .await?;
         tx.set_nonce(nonce);
 
@@ -82,15 +80,20 @@ where
             .map_err(|e| TransportError::LocalUsageError(Box::new(e)))?
             .encode_2718(&mut tx_bytes);
 
-        let res = self
+        let send_tx_result = self
             .client()
             .request("eth_sendRawTransactionSync", (Bytes::from(tx_bytes),))
             .await;
-        if res.is_err() {
-            // Reset the nonce manager if the transaction sending failed.
-            *self.nonce_manager.lock().await = Default::default();
+
+        match &send_tx_result {
+            Err(e) if is_nonce_error(e) => {
+                self.nonce_manager.release_nonce(signer_addr, nonce).await;
+            }
+            Err(_) => self.nonce_manager.clear(),
+            Ok(_) => self.nonce_manager.confirm_nonce(signer_addr, nonce).await,
         }
-        res
+
+        send_tx_result
     }
 }
 
@@ -109,6 +112,19 @@ where
     }
 }
 
+// See https://ethereum-json-rpc.com/errors
+const ETH_INVALID_INPUT_RPC_ERROR_CODE: i64 = -32000;
+
+fn is_nonce_error(error: &RpcError<TransportErrorKind>) -> bool {
+    match error {
+        RpcError::ErrorResp(ErrorPayload { code, message, .. }) => {
+            *code == ETH_INVALID_INPUT_RPC_ERROR_CODE
+                && message.to_lowercase().starts_with("nonce too")
+        }
+        _ => false,
+    }
+}
+
 #[async_trait::async_trait]
 impl<F, P, N> Provider<N> for NonceManagedProvider<F, P, N>
 where
@@ -124,19 +140,23 @@ where
         &self,
         mut tx: N::TransactionRequest,
     ) -> TransportResult<PendingTransactionBuilder<N>> {
+        let signer_addr = self.signer_address;
         let nonce = self
             .nonce_manager
-            .lock()
-            .await
-            .get_next_nonce(&self.inner, self.signer_address)
+            .get_next_nonce(&self.inner, signer_addr)
             .await?;
         tx.set_nonce(nonce);
-        let res = self.inner.send_transaction(tx).await;
-        if res.is_err() {
-            // Reset the nonce manager if the transaction sending failed.
-            *self.nonce_manager.lock().await = Default::default();
+        let send_tx_result = self.inner.send_transaction(tx).await;
+
+        match &send_tx_result {
+            Err(e) if is_nonce_error(e) => {
+                self.nonce_manager.release_nonce(signer_addr, nonce).await;
+            }
+            Err(_) => self.nonce_manager.clear(),
+            Ok(_) => self.nonce_manager.confirm_nonce(signer_addr, nonce).await,
         }
-        res
+
+        send_tx_result
     }
 
     fn get_accounts(&self) -> ProviderCall<NoParams, Vec<Address>> {
@@ -414,28 +434,6 @@ where
 
     async fn sign_transaction(&self, tx: N::TransactionRequest) -> TransportResult<Bytes> {
         self.inner.sign_transaction(tx).await
-    }
-
-    fn subscribe_blocks(&self) -> GetSubscription<(SubscriptionKind,), N::HeaderResponse> {
-        self.inner.subscribe_blocks()
-    }
-
-    fn subscribe_pending_transactions(&self) -> GetSubscription<(SubscriptionKind,), B256> {
-        self.inner.subscribe_pending_transactions()
-    }
-
-    fn subscribe_full_pending_transactions(
-        &self,
-    ) -> GetSubscription<(SubscriptionKind, Params), N::TransactionResponse> {
-        self.inner.subscribe_full_pending_transactions()
-    }
-
-    fn subscribe_logs(&self, filter: &Filter) -> GetSubscription<(SubscriptionKind, Params), Log> {
-        self.inner.subscribe_logs(filter)
-    }
-
-    async fn unsubscribe(&self, id: B256) -> TransportResult<()> {
-        self.inner.unsubscribe(id).await
     }
 
     fn syncing(&self) -> ProviderCall<NoParams, SyncStatus> {
