@@ -16,7 +16,7 @@ deploy-pauser-set:
 ensure-addresses: deploy-empty-proxies deploy-pauser-set
 
 forge-test: ensure-addresses
-	forge test
+	forge soldeer install && forge test
 
 prettier:
 	npx prettier . --write

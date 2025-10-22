@@ -20,7 +20,8 @@
     "test:mock": "hardhat test --network hardhat",
     "coverage:mock": "SOLIDITY_COVERAGE=true hardhat coverage",
     "codegen": "npx ts-node codegen/main.ts && npm run prettier",
-    "test:gas": "hardhat test --grep Gas --network hardhat"
+    "test:gas": "hardhat test --grep Gas --network hardhat",
+    "postinstall": "forge soldeer install"
   },
   "author": "",
   "license": "BSD-3-Clause",
